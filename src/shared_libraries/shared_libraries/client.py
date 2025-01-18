@@ -1,0 +1,66 @@
+import sys
+import rclpy
+import ros2_numpy as rnp
+import numpy as np
+import cv2
+from rclpy.node import Node
+from datetime import datetime 
+from shared_interfaces.srv import CameraCapture, SetupCamera
+from shared_libraries.utils import Action, ErrorCode
+
+
+class AsyncClient(Node):
+    def __init__(self, node_name: str):
+        super().__init__(node_name)
+        if "metrology" in node_name:
+            self.capture_cli = self.create_client(CameraCapture, 'm_capturing_serivce')
+            self.setup_cli = self.create_client(SetupCamera, 'm_setup_cam_service')
+        else:
+            self.capture_cli = self.create_client(CameraCapture, 's_capturing_serivce')
+            self.setup_cli = self.create_client(SetupCamera, 's_setup_cam_service')
+        
+        while not self.capture_cli.wait_for_service(timeout_sec=1.0) or not self.setup_cli.wait_for_service(timeout_sec=1.0): 
+            self.get_logger().info('Service not available, trying again...')
+        
+        self.node_name = node_name
+        self.req_capture = CameraCapture.Request()
+        self.req_setup = SetupCamera.Request()
+
+    def send_capture_request(self, dir_path: str, save_to_dir: bool, timeout: int, action: Action):
+        self.req_capture.dir_path = dir_path
+        self.req_capture.save_to_dir = save_to_dir
+        self.req_capture.timeout = timeout
+        self.action = action
+        
+        future = self.capture_cli.call_async(self.req_capture)
+        rclpy.spin_until_future_complete(self, future)
+        resp = future.result()
+        
+        print(f"Error code: {resp.e_code}")
+        if resp and resp.image.data:
+            image_np = rnp.numpify(resp.image)
+            if isinstance(resp.image_filename, str) and len(resp.image_filename) > 0: 
+                filename = f'client_{resp.image_filename}'
+            else:
+                if "metrology" in self.node_name:
+                    current_time = datetime.now().strftime("client_metrology_srv_%Y-%m-%d_%H-%M-%S.png")   
+                else:
+                    current_time = datetime.now().strftime("client_sorting_srv_%Y-%m-%d_%H-%M-%S.png")
+                filename = f"{current_time}.png"  # Change the extension as needed
+                
+            cv2.imwrite(f'{dir_path}/{filename}', cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
+            self.get_logger().info(f'Result saved as {filename}')
+        else:
+            self.get_logger().info('No image received in response.')
+            
+    def send_setup_camera_request(self, cam_serial_number: str):
+        self.req_setup.cam_id = cam_serial_number
+        future = self.setup_cli.call_async(self.req_setup)
+        rclpy.spin_until_future_complete(self, future)
+        resp = future.result()
+        if resp.status is True:
+            print("Camera Initialization is now complete!")
+            return True 
+        else:
+            print("Camera Initialization fail!")
+            return False
