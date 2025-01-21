@@ -2,3 +2,5 @@
 /log
 /install
 /captured_images
+*.png
+*.bmp

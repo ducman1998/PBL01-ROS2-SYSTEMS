@@ -3,6 +3,7 @@ import rclpy
 import ros2_numpy as rnp
 import numpy as np
 import cv2
+import json 
 from rclpy.node import Node
 from datetime import datetime 
 from shared_interfaces.srv import CameraCapture, SetupCamera
@@ -52,6 +53,36 @@ class AsyncClient(Node):
             self.get_logger().info(f'Result saved as {filename}')
         else:
             self.get_logger().info('No image received in response.')
+            
+    # below function aims to detect screw -> classify -> return valid screw positions
+    # ONLY for Sorting station
+    def process_sorting_station(self, dir_path: str, save_to_dir: bool, timeout: int):
+        self.req_capture.dir_path = dir_path
+        self.req_capture.save_to_dir = save_to_dir
+        self.req_capture.timeout = timeout
+        self.req_capture.action = Action.PROCESSING
+        
+        future = self.capture_cli.call_async(self.req_capture)
+        rclpy.spin_until_future_complete(self, future)
+        resp = future.result()
+        
+        print(f"Error code: {resp.e_code}")
+        if resp and resp.image.data:
+            self.get_logger().info(f"Detected screws in response msg: {resp.detected_screws}")
+            detected_screws = json.loads(resp.detected_screws)
+            image_np = rnp.numpify(resp.image)
+            if isinstance(resp.image_filename, str) and len(resp.image_filename) > 0: 
+                filename = f'client_{resp.image_filename}'
+            else:
+                current_time = datetime.now().strftime("client_sorting_srv_%Y-%m-%d_%H-%M-%S.png")
+                filename = f"{current_time}.png"  # Change the extension as needed
+                
+            cv2.imwrite(f'{dir_path}/{filename}', cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
+            self.get_logger().info(f'Result saved as {filename}')
+            return detected_screws
+        else:
+            self.get_logger().info('No image received in response.')
+            return [] 
             
     def send_setup_camera_request(self, cam_serial_number: str):
         self.req_setup.cam_id = cam_serial_number
