@@ -1,11 +1,7 @@
 import cv2
-import os
-import sys
 import numpy as np 
 import pandas as pd
-import matplotlib.pyplot as plt
 from typing import TypedDict, List
-from glob import glob
 
 
 def get_rbox_dimensions(bpoints, return_corners=False):
@@ -278,7 +274,7 @@ def measure_screw_dimensions(background_rgb, imfer_rgb, scaling_factor, verbose=
     cv2.drawContours(viz_im, [box_points], -1, (255, 0, 0), 1)
     (w, h), corners = get_rbox_dimensions(box_points, return_corners=True)
     if verbose:
-        print(f"Measured dimensions: dv0={w*scaling_factor} mm, L={(h+148)*scaling_factor} mm")
+        print(f"Measured dimensions: Dv0={w*scaling_factor} mm, L={(h+148)*scaling_factor} mm")
     measured_values["L"] = (h+148)*scaling_factor
 
     # Step 5.2. Categorize points into 4 cates: left, top, right and bottom sides
@@ -398,7 +394,7 @@ def measure_screw_dimensions(background_rgb, imfer_rgb, scaling_factor, verbose=
         measured_d_values.append(d2*scaling_factor)
     measured_values["D"] = np.max(measured_d_values)
     if verbose:
-        print(f"Dmin: {np.min(measured_d_values)} | Dmean: {np.mean(measured_d_values)} | Dmax: {np.max(measured_d_values)}")
+        print(f"Dmin: {np.min(measured_d_values)} | Dmean: {np.mean(measured_d_values)} | Dmax (Dv1): {np.max(measured_d_values)}")
 
     # Step 5.7. Measure Thread pitch
     p_measures = [] 
@@ -420,7 +416,6 @@ def localize_failed_crest_points(infer_rgb: np.ndarray, crest_points: list, dp_v
     status = True 
     invalid_vis_points = []
     
-    p_measures = [] 
     for i in range(len(crest_points)-1):
         dis = np.linalg.norm(np.array(crest_points[i]) - np.array(crest_points[i+1])) * scaling_factor
         if dis < ref["P"][0] or dis > ref["P"][1]:
@@ -471,7 +466,6 @@ def inspect_screw_dimensions(viz_im: np.ndarray, measured_values: dict, ref_valu
     # draw measured values on image
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 1.2
-    status_str = None
     if is_categorized:
         if ref["L"][0] <= measured_values["L"] <= ref["L"][1]:
             cv2.putText(viz_im, f"L: {round(measured_values['L'],2)} (mm) range: {ref['L'][:2]}", [50,200], font, font_scale, (0,255,0), 2)
@@ -507,7 +501,7 @@ def inspect_screw_dimensions(viz_im: np.ndarray, measured_values: dict, ref_valu
             cv2.putText(viz_im, f"meanDP: {round(measured_values['dp'],2)} (mm) range: {ref['DP'][:2]}", [50,450], font, font_scale, (0,255,0), 2)
         else:
             is_good = False
-            cv2.putText(viz_im, f"meanDP: {round(measured_values['dp'],2)} out of range {ref['DP'][:2]}", [50,450], font, font_scale, (255,0,0), 2) 
+            cv2.putText(viz_im, f"meanDP: {round(measured_values['dp'],2)} (mm) range: {ref['DP'][:2]}", [50,450], font, font_scale, (255,0,0), 2) 
         retl, _ = localize_failed_crest_points(viz_im, measured_values["lcrest_points"], measured_values["ldp_values"], ref, viz_box_size=25, scaling_factor=scaling_factor)
         retr, _ = localize_failed_crest_points(viz_im, measured_values["rcrest_points"], measured_values["rdp_values"], ref, viz_box_size=25, scaling_factor=scaling_factor)
         if retl is False or retr is False:
@@ -521,6 +515,7 @@ def inspect_screw_dimensions(viz_im: np.ndarray, measured_values: dict, ref_valu
         cv2.putText(viz_im, f"meanDP: {round(measured_values['dp'],2)} (mm)", [50,450], font, font_scale, (255,0,0), 2)
         is_good = False 
         
+    status_str = None
     if is_good:
         status_str = "OK"
     else:

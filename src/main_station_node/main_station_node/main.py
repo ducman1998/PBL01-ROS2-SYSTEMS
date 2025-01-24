@@ -81,8 +81,15 @@ class MainStationNode(Node):
         self.robot.moveHomePos()
         self.get_logger().info("Starting to process screws...")
         step_count = 0
+        
         while True:
-            detected_screws = self.sorting_cam_cli.process_sorting_station(DIR_PATH, SAVE_TO_DIR, TIMEOUT, step_count)
+            try:
+                detected_screws = self.sorting_cam_cli.process_sorting_station(DIR_PATH, SAVE_TO_DIR, TIMEOUT, step_count)
+            except:
+                detected_screws = []
+                self.get_logger().error(f"Got error when processing sorting station: {traceback.format_exc()}")
+                return 
+            
             if len(detected_screws) == 0:
                 self.get_logger().info("Not found any screws now. Exit the program and return robot to Home positon!")
                 self.robot.terminate()

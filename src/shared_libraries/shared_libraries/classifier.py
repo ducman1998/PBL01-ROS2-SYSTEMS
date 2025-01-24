@@ -1,19 +1,13 @@
 import joblib
-import matplotlib.pyplot as plt
 import numpy as np
 import cv2 
-import pandas as pd
-import shutil
 import warnings
 import os 
 import torch
 import torchvision.models as models
 import torchvision.transforms as transforms
-from glob import glob
-from tqdm import tqdm
 from skimage.feature import hog, local_binary_pattern
 from PIL import Image
-from sklearn.neural_network import MLPClassifier
 warnings.filterwarnings("ignore")
 
 

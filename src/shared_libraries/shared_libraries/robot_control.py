@@ -1,4 +1,5 @@
 import socket 
+import time 
 
 
 class RobotController():
@@ -13,6 +14,7 @@ class RobotController():
         return s 
     
     def send_msg(self, msg_str):
+        t1 = time.time()
         raw_bytes = msg_str.encode()
         print(f"\tSending the message: {msg_str}")
         try:
@@ -28,10 +30,14 @@ class RobotController():
                 msg = data.decode("utf-8")
                 print(f'the answer is: "{msg}"')
                 if msg == "Done":
+                    t2 = time.time()
+                    print(f"[RobotABB] Processed msg: {msg_str}, total time: {round(t2-t1,4)}s")
                     return True 
         except:
             pass 
         
+        t2 = time.time()
+        print(f"[RobotABB] Processed msg: {msg_str}, total time: {round(t2-t1,4)}s")
         return False 
     
     def moveHomePos(self):

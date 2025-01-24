@@ -3,9 +3,9 @@ bool save_to_dir
 int32 timeout 
 int8 action
 ---
+int8 e_code 
 sensor_msgs/Image image
 string image_filename
 string detected_screws
-int8 e_code 
 bool inspection_status
 string measured_values

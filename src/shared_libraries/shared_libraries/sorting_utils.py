@@ -6,6 +6,8 @@ import cv2
 import os
 
 
+TEMPLATE_DIR = "templates"
+
 # util functions for sorting station (image processing part)
 def intersection(line1, line2):
     # Cartesian coordinates (x1, y1, x2, y2)
@@ -145,7 +147,7 @@ def detect_screw_region(im_rgb, binary_thresh=200):
     im_g = cv2.cvtColor(im_rgb, cv2.COLOR_RGB2GRAY)
     im_bi = np.zeros_like(im_g)
     im_bi[im_g >= binary_thresh] = 255
-    cv2.imwrite("templates/binary_template.png", im_bi)
+    cv2.imwrite("{TEMPLATE_DIR}/binary_template.png", im_bi)
 
     # get biggest blob
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(im_bi)
@@ -163,7 +165,7 @@ def detect_screw_region(im_rgb, binary_thresh=200):
     # Approximate the polygon with a precision proportional to the perimeter
     hull = cv2.convexHull(contour)
     cv2.fillPoly(largest_component, [hull], color=255)
-    cv2.imwrite("templates/largest_component_template.png", largest_component)
+    cv2.imwrite("{TEMPLATE_DIR}/largest_component_template.png", largest_component)
     corners = find_bounding_rectangle(largest_component)
     
     if len(corners) == 4:

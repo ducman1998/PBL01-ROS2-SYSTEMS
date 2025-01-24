@@ -47,7 +47,9 @@ class MetrologyStationNode(Node):
         if self.device is None:
             resp.e_code = ErrorCode.NOT_INIT_CAMERA
             return resp 
+        t1 = time.time()
         image_np = self.capture(req.timeout)
+        t2 = time.time()
         if image_np is None:
             resp.e_code = ErrorCode.CAPTURE_ERROR
             return resp 
@@ -76,6 +78,7 @@ class MetrologyStationNode(Node):
             return resp 
                 
         else:
+            t3 = time.time()
             try:
                 inspection_status, measured_values, viz_im = self.process_image(image_np)
                 resp.e_code = ErrorCode.SUCCESS
@@ -92,6 +95,8 @@ class MetrologyStationNode(Node):
             except:
                 self.get_logger().error(f"Got error when measuring the screw: {traceback.format_exc()}")
                 resp.e_code = ErrorCode.PROCESS_ERROR
+            t4 = time.time()
+            self.get_logger().warn(f"Metrology station time: captured ({round(t2-t1,4)}s), processing time ({round(t4-t3,4)}s)")
             return resp 
     
     def connect_camera_callback(self, req, resp):

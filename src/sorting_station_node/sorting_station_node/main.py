@@ -4,18 +4,13 @@ import ros2_numpy as rnp
 import rclpy
 import cv2
 import ctypes
-import joblib
 import json 
 import time
 import os
 import traceback
-import torch
-import torchvision.models as models
-import torchvision.transforms as transforms
 from rclpy.node import Node
 from itala import itala
 from datetime import datetime
-from PIL import Image
 from shared_interfaces.srv import CameraCapture, SetupCamera
 from shared_libraries.utils import Action, ErrorCode
 from shared_libraries.sorting_utils import detect_screw_region, detect_screws
@@ -58,7 +53,9 @@ class SortingStationNode(Node):
         if self.device is None:
             resp.e_code = ErrorCode.NOT_INIT_CAMERA
             return resp 
+        t1 = time.time()
         image_np = self.capture(req.timeout)
+        t2 = time.time()
         if image_np is None:
             resp.e_code = ErrorCode.CAPTURE_ERROR
             return resp 
@@ -74,6 +71,7 @@ class SortingStationNode(Node):
             else:
                 cv2.imwrite(file_path, image_np)
 
+        t3 = time.time()
         resp.image = rnp.msgify(sensor_msgs.msg.Image, image_np, encoding=self.encoding)
         if int(req.action) == Action.CAPTURE_ONLY:
             resp.e_code = ErrorCode.SUCCESS
@@ -96,6 +94,7 @@ class SortingStationNode(Node):
                 
         else:
             status, detected_screws, viz_im = self.process_image(image_np) # RGB image
+            t4 = time.time()
             if status is True:
                 resp.e_code = ErrorCode.SUCCESS
                 resp.detected_screws = json.dumps(detected_screws)
@@ -103,6 +102,7 @@ class SortingStationNode(Node):
             else:
                 resp.e_code = ErrorCode.PROCESS_ERROR
                 resp.detected_screws = "[]"
+            self.get_logger().warn(f"Sorting station time: captured ({round(t2-t1,4)}s), total processing time ({round(t4-t3,4)}s)")
             return resp 
     
     def connect_camera_callback(self, req, resp):
@@ -208,7 +208,10 @@ class SortingStationNode(Node):
             self.get_logger().warn(f"Not found any screws on the sorting station now.")
             return False, None, None 
         else:
+            t1 = time.time()
             predicted_classes_dict = self.classify_screws(detected_screws_dict)
+            t2 = time.time()
+            self.get_logger().warn(f"Total inference time of classifier: {round(t2-t1,4)}s")
             if len(predicted_classes_dict) == 0:
                 self.get_logger().warn(f"Cannot infer classification model now.")
                 return False, None, None 
