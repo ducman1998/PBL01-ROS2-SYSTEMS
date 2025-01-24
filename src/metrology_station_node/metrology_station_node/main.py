@@ -7,13 +7,22 @@ import ctypes
 import time
 import os
 import traceback
+import json
 from rclpy.node import Node
 from itala import itala
 from datetime import datetime
 from shared_interfaces.srv import CameraCapture, SetupCamera
 from shared_libraries.utils import Action, ErrorCode
+from shared_libraries.metrology_utils import measure_screw_dimensions, inspect_screw_dimensions
+from shared_libraries.criteria import REF_VALUES, DOFF
 
-    
+
+SCALING_FACTOR = 0.03460213    
+OUTPUT_DIR = "outputs"
+TEMPLATE_DIR = "templates"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(TEMPLATE_DIR, exist_ok=True)
+
 class MetrologyStationNode(Node):
     def __init__(self):
         self.save_to_dir = False 
@@ -22,6 +31,11 @@ class MetrologyStationNode(Node):
         self.device_id = None 
         self.format = itala.PfncFormat_Mono8
         self.encoding = None 
+        
+        self.template_fp = os.path.join(TEMPLATE_DIR, "metrology_station_template.png")
+        self.background_rgb = None 
+        if os.path.isfile(self.template_fp):
+            self.background_rgb = cv2.cvtColor(cv2.imread(self.template_fp), cv2.COLOR_BGR2RGB)
         
         super().__init__('metrology_station_node')
         self.capture_service = self.create_service(CameraCapture, 'm_capturing_serivce', self.capture_from_cam_callback)
@@ -53,11 +67,30 @@ class MetrologyStationNode(Node):
         if int(req.action) == Action.CAPTURE_ONLY:
             resp.e_code = ErrorCode.SUCCESS
             return resp 
+        
+        elif int(req.action) == Action.SETUP_TEMPLATE:
+            self.background_rgb = image_np
+            cv2.imwrite(self.template_fp, cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
+            resp.e_code = ErrorCode.SUCCESS
+            self.get_logger().info("Processed template image for the Metrology station successfully!")
+            return resp 
+                
         else:
-            status = self.process_image(image_np)
-            if status is True:
+            try:
+                inspection_status, measured_values, viz_im = self.process_image(image_np)
                 resp.e_code = ErrorCode.SUCCESS
-            else:
+                resp.image = rnp.msgify(sensor_msgs.msg.Image, viz_im, encoding=self.encoding)
+                try:
+                    del measured_values["lcrest_points"]
+                    del measured_values["rcrest_points"]
+                    del measured_values["lroot_points"]
+                    del measured_values["rroot_points"]
+                except:
+                    pass
+                resp.measured_values = json.dumps(measured_values)
+                resp.inspection_status = inspection_status
+            except:
+                self.get_logger().error(f"Got error when measuring the screw: {traceback.format_exc()}")
                 resp.e_code = ErrorCode.PROCESS_ERROR
             return resp 
     
@@ -135,29 +168,30 @@ class MetrologyStationNode(Node):
                 else:
                     self.get_logger().error(f'format unsuported! only mono8 or rgb8!')
                     return 
-            
+                
+            # override value
+            self.encoding = 'rgb8'
             print(f"Captured image's format: {itala.get_pixel_format_description(fmt)} ~ Valid format: {itala.get_pixel_format_description(self.format)}")
             print(f"Image size: w ({width}), h ({height}), c ({channels})")
             
             p = (ctypes.c_uint8 * size * channels).from_address(int(buffer))
             nparray = np.ctypeslib.as_array(p)
             image_np = nparray.reshape((height, width, channels)).squeeze().copy()
+            if len(image_np.shape) == 2 or (len(image_np.shape) == 3 and image_np.shape[2] == 1):
+                image_np = cv2.cvtColor(image_np, cv2.COLOR_GRAY2RGB)
             self.device.stop_acquisition()  
             image.dispose()
             return image_np
     
-    def inspect_screw(self):
-        pass 
-    
-    def measure_screw(self):
-        pass 
-    
-    def process_callback(self, req, resp):
-        # capture image
+    def process_image(self, im_rgb_np):
         # measuring screw dimensions
+        measured_values, viz_im = measure_screw_dimensions(self.background_rgb, im_rgb_np, SCALING_FACTOR, verbose=True)
         # screw inspection
-        pass
-
+        inspection_status, viz_im = inspect_screw_dimensions(viz_im, measured_values, REF_VALUES, doff=DOFF, scaling_factor=SCALING_FACTOR)
+        self.get_logger().info(f"\ninspection_status: {inspection_status}")
+        viz_im_ret = np.concatenate([cv2.rotate(im_rgb_np, cv2.ROTATE_180), viz_im], axis=1)
+        return inspection_status, measured_values, viz_im_ret
+        
 def main():
     rclpy.init()
     minimal_service = MetrologyStationNode()

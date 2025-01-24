@@ -2,5 +2,7 @@
 /log
 /install
 /captured_images
+/logged_client_images
+/outputs
 *.png
 *.bmp

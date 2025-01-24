@@ -18,9 +18,14 @@ from datetime import datetime
 from PIL import Image
 from shared_interfaces.srv import CameraCapture, SetupCamera
 from shared_libraries.utils import Action, ErrorCode
-from shared_libraries.utils import intersection, filter_nearby_intersections
-from shared_libraries.utils import perspective_transform, calculate_angle, find_bounding_rectangle
+from shared_libraries.sorting_utils import detect_screw_region, detect_screws
+from shared_libraries.classifier import ScrewClassifier 
 
+
+OUTPUT_DIR = "outputs"
+TEMPLATE_DIR = "templates"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(TEMPLATE_DIR, exist_ok=True)
 
 class SortingStationNode(Node):
     def __init__(self):
@@ -29,26 +34,23 @@ class SortingStationNode(Node):
         self.device = None 
         self.device_id = None 
         self.format = itala.PfncFormat_RGB8
-        self.encoding = None 
+        self.encoding = None
+        
+        self.template_fp = os.path.join(TEMPLATE_DIR, "sorting_station_template.png")
+        self.template_rgb = None 
+        self.background_rgb = None 
+        self.corners = None 
 
         super().__init__('sorting_station_node')
         self.capture_service = self.create_service(CameraCapture, 's_capturing_serivce', self.capture_from_cam_callback)
         self.setup_cam_service = self.create_service(SetupCamera, 's_setup_cam_service', self.connect_camera_callback)
         
-        # init classifier (MLP)
-        resnet18 = models.resnet18(pretrained=True)
-        # Remove the fully connected layer to get feature vectors
-        self.resnet18 = torch.nn.Sequential(*list(resnet18.children())[:-1])
-        self.resnet18.eval()  # Set the model to evaluation mode
-
-        self.preprocess = transforms.Compose([
-            transforms.Resize((224, 224)),  # Resize image to 224x224
-            transforms.ToTensor(),          # Convert image to tensor
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalize
-        ])
-        # load trained model
-        self.trained_model = joblib.load('models/mlp_classifier_R18_512_features_model_v01.pkl')
+        self.classifier = ScrewClassifier("mlp_classifier_PblHogResnet18_861Features_model_v02.pkl", "scaler.pkl")
         
+        if os.path.isfile(self.template_fp):
+            self.template_rgb = cv2.cvtColor(cv2.imread(self.template_fp), cv2.COLOR_BGR2RGB)
+            self.background_rgb, self.corners = detect_screw_region(self.template_rgb)
+            
         self.get_logger().info("Service initialized")
 
     def capture_from_cam_callback(self, req, resp):
@@ -76,11 +78,28 @@ class SortingStationNode(Node):
         if int(req.action) == Action.CAPTURE_ONLY:
             resp.e_code = ErrorCode.SUCCESS
             return resp
+        
+        elif int(req.action) == Action.SETUP_TEMPLATE:
+            background_cubid_rgb, corners = detect_screw_region(image_np, binary_thresh=200)
+            if background_cubid_rgb is not None and len(corners) == 4:
+                self.background_rgb = background_cubid_rgb
+                self.corners = corners 
+                self.template_rgb = image_np
+                cv2.imwrite(self.template_fp, cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(os.path.join(TEMPLATE_DIR, "background_cubid.png"), cv2.cvtColor(background_cubid_rgb, cv2.COLOR_RGB2BGR))
+                resp.e_code = ErrorCode.SUCCESS
+                self.get_logger().info("Processed template image for the Sorting station successfully!")
+            else:
+                resp.e_code = ErrorCode.PROCESS_ERROR
+                self.get_logger().error("Cannot process template image of the Sorting station!")
+            return resp 
+                
         else:
-            status, detected_screws = self.process_image(image_np) # RGB image
+            status, detected_screws, viz_im = self.process_image(image_np) # RGB image
             if status is True:
                 resp.e_code = ErrorCode.SUCCESS
                 resp.detected_screws = json.dumps(detected_screws)
+                resp.image = rnp.msgify(sensor_msgs.msg.Image, viz_im, encoding=self.encoding)
             else:
                 resp.e_code = ErrorCode.PROCESS_ERROR
                 resp.detected_screws = "[]"
@@ -176,78 +195,30 @@ class SortingStationNode(Node):
         predicted_classes = {}
         try:
             for k, screw in input_screws.items():
-                image = Image.fromarray(screw)
-                input_tensor = self.preprocess(image).unsqueeze(0)  # Preprocess and add batch dimension
-
-                with torch.no_grad():
-                    features = self.resnet18(input_tensor).squeeze().numpy()  # Extract and convert to NumPy array
-                    pred_class = self.trained_model.predict(features.reshape(1,-1))[0]
-                    predicted_classes[k] = pred_class
+                    predicted_classes[k] = self.classifier.classify_screw(screw)
             return predicted_classes
         except:
             return 
-        
-    def detect_screws(self, captured_image: np.ndarray):
-        return_dict = {}
-        
-        # captured_image should be in RGB format
-        im_g = cv2.cvtColor(captured_image, cv2.COLOR_RGB2GRAY)
-        im_bi = np.zeros_like(im_g)
-        im_bi[im_g >= 125] = 255
-        cv2.imwrite("binary_image.png", im_bi)
-    
-        # get biggest blob
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(im_bi)
-        largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])  # Skip the background (label 0)
-        largest_component = (labels == largest_label).astype(np.uint8) * 255
-        
-        # fill screw holes
-        # des = cv2.bitwise_not(largest_component)
-        cnts, hier = cv2.findContours(largest_component, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in cnts:
-            cv2.drawContours(largest_component,[cnt],0,255,-1)
-        
-        contours, _ = cv2.findContours(largest_component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        # Loop through each contour to fit a polygon
-        contour = contours[0] # get the first and only contour
-        # Approximate the polygon with a precision proportional to the perimeter
-        hull = cv2.convexHull(contour)
-        cv2.fillPoly(largest_component, [hull], color=255)
-        
-        corners = find_bounding_rectangle(largest_component)
-        
-        if len(corners) == 4:
-            screw_im = perspective_transform(captured_image, corners, im_size=416*3)
-            cv2.imwrite("screw_image.png", screw_im[:,:,::-1])
-            for r in range(3):
-                for c in range(3):
-                    crop_im = screw_im[r*416:(r+1)*416, c*416:(c+1)*416]
-                    xPos = 3-r 
-                    yPos = 3-c 
-                    return_dict[f"{xPos}.{yPos}"] = crop_im.copy() 
-            return return_dict
-        else:
-            print(f"[ERROR] Cannot detect 4 corners in this image.")
-            return return_dict
                 
     def process_image(self, screw_im_np):
         # image processing
-        detected_screws_dict = self.detect_screws(screw_im_np)
-        self.get_logger().info(f"Detected screws: {detected_screws_dict}")
+        detected_screws_dict, viz_im = detect_screws(screw_im_np, self.corners, self.background_rgb, min_changed_area=5000)
+        self.get_logger().info(f"Detected {len(detected_screws_dict)} screws: {list(detected_screws_dict.keys())}")
         if len(detected_screws_dict) == 0:
             self.get_logger().warn(f"Not found any screws on the sorting station now.")
-            return False, None  
+            return False, None, None 
         else:
             predicted_classes_dict = self.classify_screws(detected_screws_dict)
             if len(predicted_classes_dict) == 0:
                 self.get_logger().warn(f"Cannot infer classification model now.")
-                return False, None 
+                return False, None, None 
             
             detected_screws = []
             for k, klass in predicted_classes_dict.items():
                 if klass == 1:
                     detected_screws.append(k)
-            return True, detected_screws 
+            self.get_logger().info(f"Valid screws: {detected_screws}")
+            return True, detected_screws, viz_im
         
 
 def main():
